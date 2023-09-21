@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from munkres import Munkres
+import time
 
 
 # Create an Arm class
@@ -52,7 +54,7 @@ def ucb(bandit, horizon):
     confidence_bounds = np.zeros(num_arms)
     for i in range(num_arms):
         arm_means[i] = bandit.pull_arm(i)
-        confidence_bounds[i] = np.sqrt((2 * np.log(horizon)) / 1)
+        confidence_bounds[i] = np.sqrt((2 * np.log(np.sum(arm_pulls))) / 1)
 
     cum_reward = 0
     ucb = arm_means + confidence_bounds
@@ -64,9 +66,9 @@ def ucb(bandit, horizon):
             arm_pulls[arm_id] + 1
         )
         arm_pulls[arm_id] += 1
-        ucb[arm_id] = arm_means[arm_id] + np.sqrt(
-            (2 * np.log(horizon)) / arm_pulls[arm_id]
-        )
+        for i in range(num_arms):
+            confidence_bounds[i] = np.sqrt((2 * np.log(np.sum(arm_pulls))) / 1)
+        ucb = arm_means + confidence_bounds
 
     return cum_reward, arm_means, arm_pulls
 
@@ -152,31 +154,23 @@ def thompson_sampling(bandit, horizon):
 def thompson_sampling_with_hint(bandit, horizon, p):
 
     def minimise_loss(emp_arm_means, p):
-        diff = np.zeros((num_arms, num_arms))
-        for i in range(num_arms):
-            for j in range(num_arms):
-                diff[i][j] = np.abs(emp_arm_means[i] - p[j])
 
-        loss_indices = np.zeros(num_arms)
-        rows = []
-        cols = []
-        min_loss = np.inf
-        min_loss_idx = 0
-        for _ in range(num_arms):
+        def calculate_mean_square_diff(emp_arm_means, p):
+            num_arms = len(emp_arm_means)
+            diff = np.zeros((num_arms, num_arms))
             for i in range(num_arms):
-                if i in rows:
-                    continue
-                for j in range(num_arms):
-                    if j in cols:
-                        continue
-                    if diff[i][j] < min_loss:
-                        min_loss = diff[i][j]
-                        min_loss_idx = [i, j]
-            rows.append(min_loss_idx[0])
-            cols.append(min_loss_idx[1])
-            loss_indices[min_loss_idx[0]] = min_loss_idx[1]
+                diff[i] = (emp_arm_means[i] - p)**2
+            return diff
         
-        return loss_indices.astype(int)
+        matrix = calculate_mean_square_diff(emp_arm_means, p).tolist()
+        m = Munkres()
+        indexes = m.compute(matrix)
+        cols = np.array([])
+        total = 0
+        for row, column in indexes:
+            cols = np.append(cols, column)
+            total += matrix[row][column]
+        return cols.astype(int), total
 
 
     # p: the real means hint is to be passed as an ascending list of the means
@@ -189,8 +183,9 @@ def thompson_sampling_with_hint(bandit, horizon, p):
     
     for i in range(horizon):
         emp_arm_means = np.array([(s[i]+1) / (s[i] + f[i] + 2) for i in range(num_arms)])
-        # indices = minimise_loss(emp_arm_means, p)
-        indices = np.argsort(emp_arm_means)
+        indices, loss = minimise_loss(emp_arm_means, p)
+        # print(loss)
+        # indices = np.argsort(emp_arm_means)
         bandit.arms = np.take_along_axis(bandit.arms, indices, axis=0)
         f = np.take_along_axis(f, indices, axis=0)
         s = np.take_along_axis(s, indices, axis=0)
@@ -215,23 +210,23 @@ def thompson_sampling_with_hint(bandit, horizon, p):
 
 iterations = 100
 epsilon = 0.333
-horizon = 100
+horizon = 1000
 real_means = np.array([0.2, 0.5, 0.75])
 regret = np.zeros(iterations)
 for i in range(iterations):
     
     bandit = Bandit(real_means, i)
     max_reward = np.max(real_means) * horizon
-    cum_reward, arm_means, arm_pulls = epsilon_greedy(bandit, horizon, i/iterations)
+    # cum_reward, arm_means, arm_pulls = epsilon_greedy(bandit, horizon, i/iterations)
     # cum_reward, arm_means, arm_pulls = ucb(bandit, horizon)
     # cum_reward, arm_means, arm_pulls = kl_ucb(bandit, horizon)
     # cum_reward, arm_means, arm_pulls = thompson_sampling(bandit, horizon)
-    # cum_reward, arm_means, arm_pulls = thompson_sampling_with_hint(bandit, horizon, np.sort(real_means))
+    cum_reward, arm_means, arm_pulls = thompson_sampling_with_hint(bandit, horizon, np.sort(real_means))
     # print("Cumulative Reward: ", cum_reward)
     # print("Maximum Reward: ", max_reward)
     # print("Arm Means: ", arm_means)
     # print("Arm Pulls: ", arm_pulls)
     regret[i] = max_reward - cum_reward
 
-print("Regret: ", regret)
-# print("Average Regret: ", np.mean(regret))
+# print("Regret: ", regret)
+print("Average Regret: ", np.mean(regret))
